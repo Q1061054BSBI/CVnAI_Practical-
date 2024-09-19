@@ -1,0 +1,1 @@
+#Practical part of the Practical essey in Computer Vision & Artificial Intelligence
