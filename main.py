@@ -2,6 +2,7 @@ import os
 import pandas as pd
 import numpy as np
 from PIL import Image
+from PIL import ImageOps
 import matplotlib.pyplot as plt
 import seaborn as sns
 import albumentations as A
@@ -10,8 +11,12 @@ from tensorflow.keras.applications import VGG16
 from tensorflow.keras.layers import Dense, Flatten, Dropout
 from tensorflow.keras.models import Model
 from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.regularizers import l2
 from tensorflow.keras.utils import to_categorical
-from sklearn.model_selection import train_test_split
+from tensorflow.keras.callbacks import EarlyStopping
+
+from sklearn.metrics import classification_report
+from sklearn.utils import class_weight
 
 import ssl
 import certifi
@@ -19,19 +24,37 @@ import certifi
 ssl._create_default_https_context = ssl._create_unverified_context  # Временно отключает проверку сертификатов
 ssl._create_default_https_context = lambda: ssl.create_default_context(cafile=certifi.where())  # Указывает путь к сертификатам certifi
 
-print(certifi.where())
 data_dir_list = ['./dataset/test', './dataset/train', './dataset/val']
 categories = ['NORMAL', 'PNEUMONIA']
 
-def plot_sample_images(df, category, samples=5):
-    sample_images = df[df['category'] == category].sample(samples)
-    plt.figure(figsize=(10, 5))
-    for i, row in enumerate(sample_images.iterrows()):
-        img = row[1]['processed_img']  # Используем обработанные изображения
-        plt.subplot(1, samples, i + 1)
-        plt.imshow(img)
-        plt.title(category)
-        plt.axis('off')
+def plot_sample_images(df, plot_title, samples=5):
+    plt.figure(figsize=(12, 10))  # Размер для двух категорий и их изображений
+
+    # Устанавливаем общий заголовок для всех изображений
+    plt.suptitle(plot_title, fontsize=18)
+
+    # Перебираем все категории
+    for idx, category in enumerate(categories):
+        sample_images = df[df['category'] == category].sample(samples)
+
+        
+        for i, row in enumerate(sample_images.iterrows()):
+            img_path = row[1]['img_path']  # Путь к оригинальному изображению
+            processed_img = row[1]['processed_img']  # Обработанное изображение
+
+            # Показать оригинальное изображение с цветовой картой 'gray'
+            plt.subplot(4, samples, i + 1 + idx * 2 * samples)  # В первом ряду — оригинальные изображения
+            plt.imshow(np.array(Image.open(img_path)), cmap='gray')
+            plt.title(f"{category} (Original)")
+            plt.axis('off')
+
+            # Показать обработанное изображение с цветовой картой 'gray'
+            plt.subplot(4, samples, i + 1 + samples + idx * 2 * samples)  # Во втором ряду — обработанные изображения
+            plt.imshow(processed_img if isinstance(processed_img, np.ndarray) else np.array(processed_img), cmap='gray')
+            plt.title(f"{category} (Processed)")
+            plt.axis('off')
+
+    plt.tight_layout(rect=[0, 0, 1, 0.96])  # Оставляем место для заголовка
     plt.show()
 
 # Загрузка предобученной модели VGG16
@@ -44,9 +67,9 @@ def build_model(input_shape):
 
     # Добавляем новые полносвязные слои
     x = Flatten()(base_model.output)
-    x = Dense(128, activation='relu')(x)
+    x = Dense(128, activation='relu', kernel_regularizer=l2(0.001))(x)
     x = Dropout(0.5)(x)
-    x = Dense(2, activation='softmax')(x)  # Выходной слой для бинарной классификации (2 класса)
+    x = Dense(2, activation='softmax', kernel_regularizer=l2(0.001))(x)  # Выходной слой для бинарной классификации (2 класса)
 
     model = Model(inputs=base_model.input, outputs=x)
     
@@ -55,51 +78,50 @@ def build_model(input_shape):
     return model
 
 # Обучение модели
-def train_model(model, X_train, y_train, X_val, y_val, epochs=10, batch_size=32):
+def train_model(model, X_train, y_train, X_val, y_val, class_weight, epochs=10, batch_size=32, callbacks=None, ):
     history = model.fit(
         X_train, y_train,
         validation_data=(X_val, y_val),
         epochs=epochs,
-        batch_size=batch_size
+        batch_size=batch_size,
+        callbacks=callbacks,
+        class_weight=class_weight
     )
     return history
 
-# Оценка модели
+
 def evaluate_model(model, X_test, y_test):
     results = model.evaluate(X_test, y_test)
     print(f"Test Loss: {results[0]}")
     print(f"Test Accuracy: {results[1]}")
 
+    y_pred = model.predict(X_test)
+    y_pred_classes = np.argmax(y_pred, axis=1)
+    y_true = np.argmax(y_test, axis=1)
+    
+    print(classification_report(y_true, y_pred_classes, target_names=categories))
+
 
 def preprocess_images(df, target_size=(224, 224)):
-    processed_images = []  # Список для хранения обработанных изображений
+    processed_images = []
 
     for index, row in df.iterrows():
         img_path = row['img_path']
-        category = row['category']
-
-        # Открываем изображение
         img = Image.open(img_path)
 
-        # Изменяем размер изображения
-        img_resized = img.resize(target_size)
+        # Кадрируем изображение до нужного размера с сохранением пропорций
+        img = ImageOps.fit(img, target_size, Image.LANCZOS)
 
-        # Преобразуем изображение в массив
-        img_array = np.array(img_resized)
+        img_array = np.array(img)
 
         # Если изображение черно-белое, преобразуем в RGB
-        if len(img_array.shape) == 2:  # Если только 2 измерения (черно-белое изображение)
-            img_array = np.stack([img_array] * 3, axis=-1)  # Преобразуем в 3-канальное изображение
+        if len(img_array.shape) == 2:
+            img_array = np.stack([img_array] * 3, axis=-1)
 
-        # Нормализуем изображение, приводим значения пикселей к диапазону [0, 1]
         img_array = img_array / 255.0
-
-        # Сохраняем обработанное изображение
         processed_images.append(img_array)
 
-    # Создаем новый столбец с обработанными изображениями
     df['processed_img'] = processed_images
-
     return df
 
 def prepare_data(df):
@@ -111,7 +133,7 @@ def prepare_data(df):
 
 def augment_images(df):
     transform = A.Compose([
-        A.Rotate(limit=15),
+        A.Rotate(limit=30),
         A.ShiftScaleRotate(shift_limit=0.1, scale_limit=0.2, rotate_limit=15),
         A.HorizontalFlip(p=0.5),
         A.RandomBrightnessContrast(p=0.2),
@@ -157,7 +179,6 @@ def check_balancing(df, categories):
     result = False
     bigger_length = 0
     for cat in categories:
-        print(cat)
         class_len = len(df[df['category'] == cat])
         if(bigger_length < class_len):
             bigger_length = class_len
@@ -168,6 +189,19 @@ def check_balancing(df, categories):
             result = True
 
     return result
+
+def plot_training_history(history):
+    plt.plot(history.history['loss'], label='Train Loss')
+    plt.plot(history.history['val_loss'], label='Val Loss')
+    plt.title('Train and Validation Loss')
+    plt.legend()
+    plt.show()
+
+    plt.plot(history.history['accuracy'], label='Train Accuracy')
+    plt.plot(history.history['val_accuracy'], label='Val Accuracy')
+    plt.title('Train and Validation Accuracy')
+    plt.legend()
+    plt.show()
 
 
 dir_titles = ['Test set', 'Train set', 'Configurate (val) set']
@@ -190,33 +224,39 @@ for i in range(len(data_dir_list)):
     plt.title('Classes distribution for '+ dir_titles[i])
     plt.show()
 
-    plot_sample_images(df, category=categories[0])
-    plot_sample_images(df, category=categories[1])
+    plot_sample_images(df, plot_title='Image samples of '+dir_titles[i])
 
-    if(check_balancing(df, categories=categories)):
+    if(check_balancing(df, categories=categories) and data_dir_list[i]!='./dataset/test'):
         df = augment_images(df)
 
         sns.countplot(x='category', data=df)
         plt.title('Balaces classes distribution for '+ dir_titles[i])
         plt.show()
     
+
     dataframes.append(df)
 
 
-# Объединяем данные из всех наборов (train, val, test)
-final_df = pd.concat(dataframes, ignore_index=True)
+train_df = dataframes[1] 
+val_df = dataframes[2] 
+test_df = dataframes[0]
 
-# Подготовка данных для обучения
-X, y = prepare_data(final_df)
+X_train, y_train = prepare_data(train_df)
+X_val, y_val = prepare_data(val_df)
+X_test, y_test = prepare_data(test_df)
 
-# Разделение на тренировочный, валидационный и тестовый наборы
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-X_train, X_val, y_train, y_val = train_test_split(X_train, y_train, test_size=0.2, random_state=42)
 
-# Создание и обучение модели
 model = build_model(input_shape)
-# overfilling on Ege 4
-history = train_model(model, X_train, y_train, X_val, y_val, epochs=10)
+
+early_stopping = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
+
+class_weights = class_weight.compute_class_weight('balanced', classes=np.unique(y_train.argmax(axis=1)), y=y_train.argmax(axis=1))
+class_weights = dict(enumerate(class_weights))
+
+history = train_model(model, X_train, y_train, X_val, y_val, callbacks=[early_stopping], class_weight=class_weights)
+
+plot_training_history(history)
 
 # Оценка модели на тестовом наборе
-evaluate_model(model, X_test, y_test)
+evaluate_model(model, X_test, y_test)   
+model.save('pneumonia_detection_model.h5')
