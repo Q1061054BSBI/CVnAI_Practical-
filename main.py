@@ -21,86 +21,11 @@ from sklearn.utils import class_weight
 import ssl
 import certifi
 
-ssl._create_default_https_context = ssl._create_unverified_context  # Временно отключает проверку сертификатов
-ssl._create_default_https_context = lambda: ssl.create_default_context(cafile=certifi.where())  # Указывает путь к сертификатам certifi
+ssl._create_default_https_context = ssl._create_unverified_context 
+ssl._create_default_https_context = lambda: ssl.create_default_context(cafile=certifi.where())
 
 data_dir_list = ['./dataset/test', './dataset/train', './dataset/val']
 categories = ['NORMAL', 'PNEUMONIA']
-
-def plot_sample_images(df, plot_title, samples=5):
-    plt.figure(figsize=(12, 10))  # Размер для двух категорий и их изображений
-
-    # Устанавливаем общий заголовок для всех изображений
-    plt.suptitle(plot_title, fontsize=18)
-
-    # Перебираем все категории
-    for idx, category in enumerate(categories):
-        sample_images = df[df['category'] == category].sample(samples)
-
-        
-        for i, row in enumerate(sample_images.iterrows()):
-            img_path = row[1]['img_path']  # Путь к оригинальному изображению
-            processed_img = row[1]['processed_img']  # Обработанное изображение
-
-            # Показать оригинальное изображение с цветовой картой 'gray'
-            plt.subplot(4, samples, i + 1 + idx * 2 * samples)  # В первом ряду — оригинальные изображения
-            plt.imshow(np.array(Image.open(img_path)), cmap='gray')
-            plt.title(f"{category} (Original)")
-            plt.axis('off')
-
-            # Показать обработанное изображение с цветовой картой 'gray'
-            plt.subplot(4, samples, i + 1 + samples + idx * 2 * samples)  # Во втором ряду — обработанные изображения
-            plt.imshow(processed_img if isinstance(processed_img, np.ndarray) else np.array(processed_img), cmap='gray')
-            plt.title(f"{category} (Processed)")
-            plt.axis('off')
-
-    plt.tight_layout(rect=[0, 0, 1, 0.96])  # Оставляем место для заголовка
-    plt.show()
-
-# Загрузка предобученной модели VGG16
-def build_model(input_shape):
-    base_model = VGG16(weights='imagenet', include_top=False, input_shape=input_shape)  # Загружаем модель без верхних слоев
-
-    # Замораживаем веса базовой модели
-    for layer in base_model.layers:
-        layer.trainable = False
-
-    # Добавляем новые полносвязные слои
-    x = Flatten()(base_model.output)
-    x = Dense(128, activation='relu', kernel_regularizer=l2(0.001))(x)
-    x = Dropout(0.5)(x)
-    x = Dense(2, activation='softmax', kernel_regularizer=l2(0.001))(x)  # Выходной слой для бинарной классификации (2 класса)
-
-    model = Model(inputs=base_model.input, outputs=x)
-    
-    # Компилируем модель
-    model.compile(optimizer=Adam(learning_rate=0.0001), loss='binary_crossentropy', metrics=['accuracy'])
-    return model
-
-# Обучение модели
-def train_model(model, X_train, y_train, X_val, y_val, class_weight, epochs=10, batch_size=32, callbacks=None, ):
-    history = model.fit(
-        X_train, y_train,
-        validation_data=(X_val, y_val),
-        epochs=epochs,
-        batch_size=batch_size,
-        callbacks=callbacks,
-        class_weight=class_weight
-    )
-    return history
-
-
-def evaluate_model(model, X_test, y_test):
-    results = model.evaluate(X_test, y_test)
-    print(f"Test Loss: {results[0]}")
-    print(f"Test Accuracy: {results[1]}")
-
-    y_pred = model.predict(X_test)
-    y_pred_classes = np.argmax(y_pred, axis=1)
-    y_true = np.argmax(y_test, axis=1)
-    
-    print(classification_report(y_true, y_pred_classes, target_names=categories))
-
 
 def preprocess_images(df, target_size=(224, 224)):
     processed_images = []
@@ -108,13 +33,8 @@ def preprocess_images(df, target_size=(224, 224)):
     for index, row in df.iterrows():
         img_path = row['img_path']
         img = Image.open(img_path)
-
-        # Кадрируем изображение до нужного размера с сохранением пропорций
         img = ImageOps.fit(img, target_size, Image.LANCZOS)
-
         img_array = np.array(img)
-
-        # Если изображение черно-белое, преобразуем в RGB
         if len(img_array.shape) == 2:
             img_array = np.stack([img_array] * 3, axis=-1)
 
@@ -124,12 +44,30 @@ def preprocess_images(df, target_size=(224, 224)):
     df['processed_img'] = processed_images
     return df
 
-def prepare_data(df):
-    X = np.array(df['processed_img'].tolist())  # Преобразуем изображения в массивы
-    y = np.array(df['category'].apply(lambda x: 1 if x == 'PNEUMONIA' else 0).tolist())  # Метки категорий (1 для пневмонии, 0 для нормальных)
-    y = to_categorical(y, num_classes=2)  # Преобразуем метки в категориальный формат (для бинарной классификации)
-    return X, y
+def plot_sample_images(df, plot_title, samples=5):
+    plt.figure(figsize=(12, 10))
+    plt.suptitle(plot_title, fontsize=18)
 
+    for idx, category in enumerate(categories):
+        sample_images = df[df['category'] == category].sample(samples)
+
+        
+        for i, row in enumerate(sample_images.iterrows()):
+            img_path = row[1]['img_path'] 
+            processed_img = row[1]['processed_img']
+
+            plt.subplot(4, samples, i + 1 + idx * 2 * samples) 
+            plt.imshow(np.array(Image.open(img_path)), cmap='gray')
+            plt.title(f"{category} (Original)")
+            plt.axis('off')
+
+            plt.subplot(4, samples, i + 1 + samples + idx * 2 * samples) 
+            plt.imshow(processed_img if isinstance(processed_img, np.ndarray) else np.array(processed_img), cmap='gray')
+            plt.title(f"{category} (Processed)")
+            plt.axis('off')
+
+    plt.tight_layout(rect=[0, 0, 1, 0.96])
+    plt.show()
 
 def augment_images(df):
     transform = A.Compose([
@@ -139,36 +77,25 @@ def augment_images(df):
         A.RandomBrightnessContrast(p=0.2),
     ])
 
-    # Определяем количество изображений для каждого класса
     count_normal = len(df[df['category'] == 'NORMAL'])
     count_pneumonia = len(df[df['category'] == 'PNEUMONIA'])
 
-    # Определяем, какой класс нужно дополнить
     if count_normal < count_pneumonia:
         minority_class = 'NORMAL'
     else:
         minority_class = 'PNEUMONIA'
 
-    # Вычисляем, сколько дополнительных изображений нужно
     diff = abs(count_normal - count_pneumonia)
     
-    # Выбираем случайные изображения из меньшинства для аугментации
     minority_df = df[df['category'] == minority_class].sample(diff, replace=True)
     
     augmented_images = []
     for index, row in minority_df.iterrows():
-        img = row['processed_img']  # Берем уже обработанное изображение
-        
-        # Преобразуем изображение обратно в формат numpy для применения аугментации
-        img = np.array(img)
-        
-        # Применяем аугментацию
+        img = row['processed_img'] 
+        img = np.array(img)      
         augmented_img = transform(image=img)['image']
-        
-        # Сохраняем аугментированные изображения
         augmented_images.append((augmented_img, minority_class))
     
-    # Добавляем новые аугментированные изображения к DataFrame
     for aug_img, category in augmented_images:
         df = df._append({'img_path': None, 'category': category, 'processed_img': aug_img}, ignore_index=True)
 
@@ -190,6 +117,40 @@ def check_balancing(df, categories):
 
     return result
 
+def prepare_data(df):
+    X = np.array(df['processed_img'].tolist()) 
+    y = np.array(df['category'].apply(lambda x: 1 if x == 'PNEUMONIA' else 0).tolist()) 
+    y = to_categorical(y, num_classes=2) 
+    return X, y
+
+
+def build_model(input_shape):
+    base_model = VGG16(weights='imagenet', include_top=False, input_shape=input_shape) 
+
+    for layer in base_model.layers:
+        layer.trainable = False
+
+    x = Flatten()(base_model.output)
+    x = Dense(128, activation='relu', kernel_regularizer=l2(0.001))(x)
+    x = Dropout(0.5)(x)
+    x = Dense(2, activation='softmax', kernel_regularizer=l2(0.001))(x)
+
+    model = Model(inputs=base_model.input, outputs=x)
+    
+    model.compile(optimizer=Adam(learning_rate=0.0001), loss='binary_crossentropy', metrics=['accuracy'])
+    return model
+
+def train_model(model, X_train, y_train, X_val, y_val, class_weight, epochs=10, batch_size=32, callbacks=None, ):
+    history = model.fit(
+        X_train, y_train,
+        validation_data=(X_val, y_val),
+        epochs=epochs,
+        batch_size=batch_size,
+        callbacks=callbacks,
+        class_weight=class_weight
+    )
+    return history
+
 def plot_training_history(history):
     plt.plot(history.history['loss'], label='Train Loss')
     plt.plot(history.history['val_loss'], label='Val Loss')
@@ -202,6 +163,18 @@ def plot_training_history(history):
     plt.title('Train and Validation Accuracy')
     plt.legend()
     plt.show()
+
+
+def evaluate_model(model, X_test, y_test):
+    results = model.evaluate(X_test, y_test)
+    print(f"Test Loss: {results[0]}")
+    print(f"Test Accuracy: {results[1]}")
+
+    y_pred = model.predict(X_test)
+    y_pred_classes = np.argmax(y_pred, axis=1)
+    y_true = np.argmax(y_test, axis=1)
+    
+    print(classification_report(y_true, y_pred_classes, target_names=categories))
 
 
 dir_titles = ['Test set', 'Train set', 'Configurate (val) set']
@@ -217,7 +190,6 @@ for i in range(len(data_dir_list)):
 
     df = pd.DataFrame(data, columns=['img_path', 'category'])
     print(df.head())
-    # dataframes.append(df)
     df = preprocess_images(df)
 
     sns.countplot(x='category', data=df)
@@ -257,6 +229,5 @@ history = train_model(model, X_train, y_train, X_val, y_val, callbacks=[early_st
 
 plot_training_history(history)
 
-# Оценка модели на тестовом наборе
 evaluate_model(model, X_test, y_test)   
 model.save('pneumonia_detection_model.h5')
