@@ -26,6 +26,7 @@ ssl._create_default_https_context = lambda: ssl.create_default_context(cafile=ce
 
 data_dir_list = ['./dataset/test', './dataset/train', './dataset/val']
 categories = ['NORMAL', 'PNEUMONIA']
+dir_titles = ['Test set', 'Train set', 'Configurate (val) set']
 
 def preprocess_images(df, target_size=(224, 224)):
     processed_images = []
@@ -177,10 +178,10 @@ def evaluate_model(model, X_test, y_test):
     print(classification_report(y_true, y_pred_classes, target_names=categories))
 
 
-dir_titles = ['Test set', 'Train set', 'Configurate (val) set']
-dataframes = []
-input_shape = (224, 224, 3) 
+
+dataframes = [] 
 for i in range(len(data_dir_list)):
+    #Forming data in DataFrame
     data = []
     for category in categories:
         category_path = os.path.join(data_dir_list[i], category)
@@ -189,15 +190,16 @@ for i in range(len(data_dir_list)):
             data.append((img_path, category))
 
     df = pd.DataFrame(data, columns=['img_path', 'category'])
-    print(df.head())
+    
+    #image processing 
     df = preprocess_images(df)
+    plot_sample_images(df, plot_title='Image samples of '+dir_titles[i])
 
+    #Assessment of class balance and balancing of classes
     sns.countplot(x='category', data=df)
     plt.title('Classes distribution for '+ dir_titles[i])
     plt.show()
-
-    plot_sample_images(df, plot_title='Image samples of '+dir_titles[i])
-
+    
     if(check_balancing(df, categories=categories) and data_dir_list[i]!='./dataset/test'):
         df = augment_images(df)
 
@@ -205,10 +207,9 @@ for i in range(len(data_dir_list)):
         plt.title('Balaces classes distribution for '+ dir_titles[i])
         plt.show()
     
-
     dataframes.append(df)
 
-
+#Dividing data into fragments for use at different stages
 train_df = dataframes[1] 
 val_df = dataframes[2] 
 test_df = dataframes[0]
@@ -217,17 +218,25 @@ X_train, y_train = prepare_data(train_df)
 X_val, y_val = prepare_data(val_df)
 X_test, y_test = prepare_data(test_df)
 
+#model building
+input_shape = (224, 224, 3)
 
 model = build_model(input_shape)
 
+#Mechanism for stopping learning in case of lack of progress
 early_stopping = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
 
+#Calculation of model weights
 class_weights = class_weight.compute_class_weight('balanced', classes=np.unique(y_train.argmax(axis=1)), y=y_train.argmax(axis=1))
 class_weights = dict(enumerate(class_weights))
 
+#Model training
 history = train_model(model, X_train, y_train, X_val, y_val, callbacks=[early_stopping], class_weight=class_weights)
 
 plot_training_history(history)
 
-evaluate_model(model, X_test, y_test)   
+#model evaluation
+evaluate_model(model, X_test, y_test) 
+
+#export
 model.save('pneumonia_detection_model.h5')
